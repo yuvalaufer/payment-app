@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>מערכת ניהול תשלומי אנסמבל</title>
     <style>
+        /* CSS בסיסי לעברית ועיצוב */
         body { font-family: Arial, sans-serif; direction: rtl; text-align: right; margin: 20px; background-color: #f4f4f4;}
         .container { max-width: 1000px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
         h1, h2 { border-bottom: 2px solid #ccc; padding-bottom: 5px; color: #333; }
@@ -27,7 +28,18 @@
         {% if request.args.get('message') %}
             <div class="message">{{ request.args.get('message') }}</div>
         {% endif %}
-
+        
+        <div class="form-container">
+            <h2>עריכת רשימת תלמידים</h2>
+            <form method="POST" action="{{ url_for('edit_students') }}">
+                <p>ערוך את רשימת התלמידים הנוכחית (תלמיד אחד בכל שורה):</p>
+                <textarea name="students_list" rows="5" style="width: 98%; direction: rtl; text-align: right; margin-bottom: 10px; padding: 10px;">{{ students_text }}</textarea>
+                <button type="submit">שמור רשימת תלמידים חדשה</button>
+            </form>
+        </div>
+        
+        <hr style="margin: 30px 0;">
+        
         <div class="form-container">
             <h2>הגדרות גלובליות</h2>
             <form method="POST" action="{{ url_for('update_settings') }}">
@@ -111,10 +123,15 @@
             const select = row.querySelector('.status-select');
             const paidInput = row.querySelector('.paid-amount');
             const remainingCell = row.querySelector('.remaining-cell');
+            
+            // בדיקה אם האלמנטים קיימים לפני המשך
+            if (!select || !paidInput || !remainingCell) return; 
+            
             const fee = parseInt(paidInput.dataset.fee);
             const status = select.value;
             
-            row.className = 'status-' + status.replace(' ', '-'); // עדכון צבע
+            // עדכון צבע השורה
+            row.className = 'status-' + status.replace(' ', '-'); 
 
             if (status === 'שולם חלקי') {
                 paidInput.disabled = false;
