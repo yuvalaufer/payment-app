@@ -1,3 +1,7 @@
-# requirements.txt
 Flask
 gunicorn
+Flask-HTTPAuth
+GitPython
+python-dotenv
+
+#end requirements.txt
