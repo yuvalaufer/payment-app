@@ -45,21 +45,25 @@ def setup_git_repo():
             try:
                 if repo.remotes:
                     print("INFO: Pulling latest data from GitHub.")
-                    # טיפול מיוחד ל-Render/GitHub:
-                    repo.git.pull('origin', repo.active_branch.name) # משיכת הנתונים הקיימים
+                    # repo.git.pull('origin', repo.active_branch.name) 
+                    repo.remotes.origin.pull() # <--- ננסה פקודה זו שוב, ואם היא נכשלת...
             except Exception as e:
+                # נשאר לוגיקה זו כרגע, היא נותנת אזהרה ולא עוצרת את הפריסה
                 print(f"WARNING: Initial Git pull failed (might be first run): {e}")
 
         else:
             repo = git.Repo(repo_path)
-            # גם בהפעלה חוזרת, מוודאים שמושכים את הנתונים העדכניים
+            # 2. תיקון: משיכת נתונים רק אם לא במצב detached HEAD
             try:
-                print("INFO: Pulling latest data from GitHub.")
-                repo.git.pull('origin', repo.active_branch.name) # משיכת הנתונים הקיימים
+                if not repo.head.is_detached: # <--- התיקון לבעיית ה-HEAD
+                    print("INFO: Pulling latest data from GitHub.")
+                    repo.remotes.origin.pull() 
+                else:
+                    print("WARNING: Git is in detached HEAD state. Skipping pull at startup.")
             except Exception as e:
                 print(f"WARNING: Git pull failed: {e}")
             
-        # 2. הגדרת פרטי המשתמש ל-Commit
+        # 3. הגדרת פרטי המשתמש ל-Commit
         repo.config_writer().set_value('user', 'email', 'render-bot@example.com').release()
         repo.config_writer().set_value('user', 'name', 'Render Data Bot').release()
         return repo
@@ -199,4 +203,135 @@ if not os.path.exists(STUDENT_LIST_FILE):
 def index():
     conn = get_db_connection()
     settings = conn.execute("SELECT monthly_fee, report_email FROM settings WHERE id = 1").fetchone()
-    current_master
+    current_master_list = load_student_list() 
+    
+    # --- לוגיקה לחישוב רשימת חודשים (סדר עולה) ---
+    months = set()
+    
+    # הוסף את 12 החודשים הנוכחיים והבאים
+    today = datetime.now()
+    for i in range(12): 
+        # יצירת אובייקט תאריך עבור תחילת החודש ה-i
+        month_obj = today.replace(day=1) + timedelta(days=32 * i)
+        month_obj = month_obj.replace(day=1) 
+        months.add(month_obj.strftime("%B %Y"))
+        
+    # הוסף חודשים מתוך מסד הנתונים (היסטוריה)
+    db_months = conn.execute("SELECT DISTINCT month FROM payments").fetchall()
+    for row in db_months:
+        months.add(row['month'])
+        
+    # ממיר ל רשימה וממיין בסדר עולה (מהישן לחדש)
+    sorted_months = sorted(list(months), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=False) 
+    
+    if not sorted_months:
+        sorted_months = [today.strftime("%B %Y")]
+
+    current_month = request.args.get('month') or request.form.get('selected_month') or sorted_months[-1]
+    # --- סוף לוגיקת חודשים ---
+    
+    payments_data = {}
+    db_payments = conn.execute("SELECT * FROM payments WHERE month = ?", (current_month,)).fetchall()
+    
+    students_with_past_data = set()
+    for row in db_payments:
+        payments_data[row['student_name']] = dict(row)
+        students_with_past_data.add(row['student_name'])
+
+    final_students = sorted(list(students_with_past_data.union(set(current_master_list))))
+
+    report_data = []
+    total_paid = 0 
+    
+    for student in final_students: 
+        payment = payments_data.get(student, {})
+        status = payment.get('status', 'לא שולם')
+        paid_amount = payment.get('paid_amount', 0)
+        
+        if status == 'שולם':
+            remaining = 0
+            paid_amount = settings['monthly_fee']
+        elif status == 'שולם חלקי':
+            remaining = settings['monthly_fee'] - paid_amount
+        else:
+            remaining = settings['monthly_fee']
+            paid_amount = 0
+
+        # עדכון הסכום הכולל שהתקבל
+        total_paid += paid_amount 
+
+        report_data.append({
+            'name': student,
+            'status': status,
+            'paid_amount': paid_amount,
+            'remaining': remaining,
+            'fee': settings['monthly_fee'] 
+        })
+
+    conn.close()
+    
+    students_text = "\n".join(load_student_list()) 
+    
+    return render_template('index.html', 
+                           months=sorted_months,
+                           current_month=current_month,
+                           settings=settings,
+                           report_data=report_data,
+                           status_options=STATUS_OPTIONS,
+                           students_text=students_text,
+                           total_paid=total_paid)
+
+@app.route('/update_settings', methods=['POST'])
+@auth.login_required 
+def update_settings():
+    try:
+        new_fee = int(request.form['monthly_fee'])
+        new_email = request.form['report_email']
+        
+        conn = get_db_connection()
+        conn.execute("UPDATE settings SET monthly_fee = ?, report_email = ? WHERE id = 1",
+                     (new_fee, new_email))
+        conn.commit()
+        conn.close()
+        
+        commit_data(REPO, message="Updated global settings")
+
+        return redirect(url_for('index', message='ההגדרות נשמרו בהצלחה!'))
+    except Exception as e:
+        return f"אירעה שגיאה בעת שמירת ההגדרות: {e}", 500
+
+@app.route('/update_payments', methods=['POST'])
+@auth.login_required 
+def update_payments():
+    current_month = request.form['month']
+    students = load_student_list()
+    conn = get_db_connection()
+    
+    try:
+        settings = conn.execute("SELECT monthly_fee FROM settings WHERE id = 1").fetchone()
+        monthly_fee = settings['monthly_fee']
+        
+        db_payments = conn.execute("SELECT * FROM payments WHERE month = ?", (current_month,)).fetchall()
+        students_with_past_data = set(row['student_name'] for row in db_payments)
+        final_students = students_with_past_data.union(set(students))
+
+        for student in final_students:
+            status = request.form.get(f'status_{student}')
+            paid_amount_str = request.form.get(f'paid_{student}')
+            
+            if not status:
+                continue
+
+            paid_amount = int(paid_amount_str) if paid_amount_str and paid_amount_str.isdigit() else 0
+
+            if status == 'שולם':
+                paid_amount = monthly_fee
+            elif status == 'לא שולם':
+                paid_amount = 0
+
+            conn.execute("""
+                INSERT OR REPLACE INTO payments (month, student_name, status, paid_amount)
+                VALUES (?, ?, ?, ?)
+            """, (current_month, student, status, paid_amount))
+            
+        conn.commit()
