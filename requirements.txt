@@ -3,6 +3,7 @@ gunicorn
 Flask-HTTPAuth
 GitPython
 python-dotenv
-python-dateutil # חדש!
+python-dateutil
+Flask-Mail
 
 #end requirements.txt
