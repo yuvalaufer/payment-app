@@ -3,5 +3,6 @@ gunicorn
 Flask-HTTPAuth
 GitPython
 python-dotenv
+python-dateutil # חדש!
 
 #end requirements.txt
