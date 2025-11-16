@@ -45,17 +45,15 @@ def setup_git_repo():
             try:
                 if repo.remotes:
                     print("INFO: Pulling latest data from GitHub.")
-                    # repo.git.pull('origin', repo.active_branch.name) 
-                    repo.remotes.origin.pull() # <--- ננסה פקודה זו שוב, ואם היא נכשלת...
+                    repo.remotes.origin.pull() 
             except Exception as e:
-                # נשאר לוגיקה זו כרגע, היא נותנת אזהרה ולא עוצרת את הפריסה
                 print(f"WARNING: Initial Git pull failed (might be first run): {e}")
 
         else:
             repo = git.Repo(repo_path)
             # 2. תיקון: משיכת נתונים רק אם לא במצב detached HEAD
             try:
-                if not repo.head.is_detached: # <--- התיקון לבעיית ה-HEAD
+                if not repo.head.is_detached:
                     print("INFO: Pulling latest data from GitHub.")
                     repo.remotes.origin.pull() 
                 else:
@@ -307,7 +305,7 @@ def update_payments():
     students = load_student_list()
     conn = get_db_connection()
     
-    try:
+    try: # <--- בלוק ה-try מתחיל כאן
         settings = conn.execute("SELECT monthly_fee FROM settings WHERE id = 1").fetchone()
         monthly_fee = settings['monthly_fee']
         
@@ -335,3 +333,55 @@ def update_payments():
             """, (current_month, student, status, paid_amount))
             
         conn.commit()
+        conn.close() # <--- כאן נגמר בלוק ה-try המוצלח
+
+        commit_data(REPO, message=f"Updated payments for {current_month}")
+
+        return redirect(url_for('index', month=current_month, message='התשלומים נשמרו בהצלחה!'))
+    except Exception as e: # <--- בלוק ה-except סוגר את הפונקציה
+        return f"אירעה שגיאה בעת שמירת התשלומים: {e}", 500
+
+@app.route('/edit_students', methods=['POST'])
+@auth.login_required
+def edit_students():
+    students_text = request.form['students_list']
+    new_students = students_text.split('\n')
+    
+    save_student_list(new_students) 
+    
+    return redirect(url_for('index', message='רשימת התלמידים עודכנה בהצלחה!'))
+
+
+@app.route('/delete_month', methods=['POST'])
+@auth.login_required 
+def delete_month():
+    month_to_delete = request.form.get('month_to_delete')
+    
+    if not month_to_delete:
+        return "שם החודש אינו חוקי.", 400
+        
+    conn = get_db_connection()
+    try:
+        conn.execute("DELETE FROM payments WHERE month = ?", (month_to_delete,))
+        conn.commit()
+        conn.close()
+        
+        commit_data(REPO, message=f"Deleted data for {month_to_delete}")
+        
+        return redirect(url_for('index', message=f'הנתונים לחודש {month_to_delete} נמחקו בהצלחה!'))
+    except Exception as e:
+        return f"אירעה שגיאה במחיקת נתונים: {e}", 500
+
+
+@app.route('/send_report', methods=['POST'])
+@auth.login_required 
+def send_report():
+    current_month = request.form.get('month')
+    # זוהי פונקציית דמה.
+    return redirect(url_for('index', month=current_month, message=f'✅ דוח לחודש {current_month} נשלח בהצלחה למייל {os.environ.get("REPORT_EMAIL", "המייל שהוגדר")}. (פעולת דמה)'))
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+#end app.py
