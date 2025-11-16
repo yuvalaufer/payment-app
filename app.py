@@ -7,22 +7,23 @@ from datetime import datetime, timedelta
 from flask_httpauth import HTTPBasicAuth 
 import git 
 from dotenv import load_dotenv 
+from flask_mail import Mail, Message
 
-# --- טעינת משתני סביבה (לגישה ל-GIT) ---
+# --- טעינת משתני סביבה (לגישה ל-GIT ולמייל) ---
 load_dotenv()
 GIT_TOKEN = os.environ.get("GIT_TOKEN")
 # --- סוף טעינת משתני סביבה ---
 
-# --- הגדרות נתיבים (שמירה בתיקייה מקומית זמנית, נשמרת ל-GitHub) ---
+# --- הגדרות נתיבים ---
 DATA_DIR = '.' 
 DATABASE = os.path.join(DATA_DIR, 'payments.db')
 STUDENT_LIST_FILE = os.path.join(DATA_DIR, 'student_list.txt')
 # --- סוף הגדרות נתיבים ---
 
-DEFAULT_MONTHLY_FEE = 1000 
+DEFAULT_MONTHLY_FEE = 330 # <--- **העדכון לסכום הדיפולט**
 STATUS_OPTIONS = ['לא שולם', 'שולם', 'שולם חלקי']
 
-# --- פונקציות GIT (כולל תיקון שמירת הנתונים באמצעות Pull) ---
+# --- פונקציות GIT ---
 def setup_git_repo():
     """מאתחל את רפוזיטורי ה-Git המקומי ומושך נתונים עדכניים."""
     try:
@@ -37,11 +38,9 @@ def setup_git_repo():
             git_url = os.environ.get('RENDER_GIT_REPO_URL') or os.environ.get('GIT_REPO_URL')
             
             if git_url and GIT_TOKEN:
-                # הגדרת ה-remote URL עם ה-Token לצורך Pull/Push
                 auth_url = git_url.replace("https://", f"https://oauth2:{GIT_TOKEN}@")
                 repo.create_remote('origin', auth_url)
                 
-            # אם יש קבצים קיימים ב-GitHub, מושכים אותם כעת
             try:
                 if repo.remotes:
                     print("INFO: Pulling latest data from GitHub.")
@@ -75,20 +74,16 @@ def commit_data(repo, message="Data update from web app"):
         return False
         
     try:
-        # 1. מוודא שה-DB וקובץ התלמידים נמצאים תחת מעקב
         if os.path.exists(DATABASE):
             repo.index.add([DATABASE])
         if os.path.exists(STUDENT_LIST_FILE):
             repo.index.add([STUDENT_LIST_FILE])
 
-        # אם אין שינויים, לא ממשיך
         if not repo.index.diff(None):
             return True 
 
-        # 2. מבצע Commit
         repo.index.commit(message)
         
-        # 3. מבצע Push
         if GIT_TOKEN:
             repo.remote('origin').push()
             print("INFO: Data pushed to GitHub successfully.")
@@ -118,6 +113,19 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = '1A2B3C4D5E6F7G8H9I0J_SUPER_SECRET' 
 
 # ----------------------------------------------------
+#               הגדרות Flask-Mail
+# ----------------------------------------------------
+app.config['MAIL_SERVER'] = os.environ.get('SMTP_SERVER')
+app.config['MAIL_PORT'] = int(os.environ.get('SMTP_PORT', 587))
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = os.environ.get('EMAIL_SENDER')
+app.config['MAIL_PASSWORD'] = os.environ.get('EMAIL_PASSWORD')
+app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('EMAIL_SENDER')
+
+mail = Mail(app) # <--- אתחול Mail
+# ----------------------------------------------------
+
+# ----------------------------------------------------
 #               הגדרת אימות (Basic Auth)
 # ----------------------------------------------------
 
@@ -128,6 +136,7 @@ USERS = {
 
 @auth.verify_password
 def verify_password(username, password):
+    # חוסם התחברות עם סיסמת הדיפולט מחשש אבטחה
     if username in USERS and USERS.get(username) == password and password != "default_pass":
         return username
     return None
@@ -155,6 +164,7 @@ def init_db():
     
     c.execute("SELECT COUNT(*) FROM settings")
     if c.fetchone()[0] == 0:
+        # משתמש ב-DEFAULT_MONTHLY_FEE = 330
         c.execute("INSERT INTO settings (id, monthly_fee, report_email) VALUES (1, ?, ?)", 
                   (DEFAULT_MONTHLY_FEE, 'your_email@example.com'))
 
@@ -206,20 +216,16 @@ def index():
     # --- לוגיקה לחישוב רשימת חודשים (סדר עולה) ---
     months = set()
     
-    # הוסף את 12 החודשים הנוכחיים והבאים
     today = datetime.now()
     for i in range(12): 
-        # יצירת אובייקט תאריך עבור תחילת החודש ה-i
         month_obj = today.replace(day=1) + timedelta(days=32 * i)
         month_obj = month_obj.replace(day=1) 
         months.add(month_obj.strftime("%B %Y"))
         
-    # הוסף חודשים מתוך מסד הנתונים (היסטוריה)
     db_months = conn.execute("SELECT DISTINCT month FROM payments").fetchall()
     for row in db_months:
         months.add(row['month'])
         
-    # ממיר ל רשימה וממיין בסדר עולה (מהישן לחדש)
     sorted_months = sorted(list(months), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=False) 
     
     if not sorted_months:
@@ -236,6 +242,7 @@ def index():
         payments_data[row['student_name']] = dict(row)
         students_with_past_data.add(row['student_name'])
 
+    # רשימה סופית: תלמידי מאסטר נוכחיים + תלמידים עם היסטוריית תשלום לחודש זה (להקפאת הרכב התלמידים)
     final_students = sorted(list(students_with_past_data.union(set(current_master_list))))
 
     report_data = []
@@ -255,7 +262,6 @@ def index():
             remaining = settings['monthly_fee']
             paid_amount = 0
 
-        # עדכון הסכום הכולל שהתקבל
         total_paid += paid_amount 
 
         report_data.append({
@@ -305,7 +311,7 @@ def update_payments():
     students = load_student_list()
     conn = get_db_connection()
     
-    try: # <--- בלוק ה-try מתחיל כאן
+    try:
         settings = conn.execute("SELECT monthly_fee FROM settings WHERE id = 1").fetchone()
         monthly_fee = settings['monthly_fee']
         
@@ -333,12 +339,12 @@ def update_payments():
             """, (current_month, student, status, paid_amount))
             
         conn.commit()
-        conn.close() # <--- כאן נגמר בלוק ה-try המוצלח
+        conn.close() 
 
         commit_data(REPO, message=f"Updated payments for {current_month}")
 
         return redirect(url_for('index', month=current_month, message='התשלומים נשמרו בהצלחה!'))
-    except Exception as e: # <--- בלוק ה-except סוגר את הפונקציה
+    except Exception as e:
         return f"אירעה שגיאה בעת שמירת התשלומים: {e}", 500
 
 @app.route('/edit_students', methods=['POST'])
@@ -377,8 +383,41 @@ def delete_month():
 @auth.login_required 
 def send_report():
     current_month = request.form.get('month')
-    # זוהי פונקציית דמה.
-    return redirect(url_for('index', month=current_month, message=f'✅ דוח לחודש {current_month} נשלח בהצלחה למייל {os.environ.get("REPORT_EMAIL", "המייל שהוגדר")}. (פעולת דמה)'))
+    receiver_email = os.environ.get("REPORT_EMAIL") 
+    sender_email = os.environ.get("EMAIL_SENDER")
+    
+    conn = get_db_connection()
+    settings = conn.execute("SELECT report_email FROM settings WHERE id = 1").fetchone()
+    conn.close()
+    
+    report_to = settings['report_email'] if settings and settings['report_email'] else receiver_email
+
+    if not report_to or not sender_email:
+        return redirect(url_for('index', month=current_month, message='❌ שגיאה: לא הוגדר מייל נמען או שולח!'))
+
+    body_content = f"""
+    שלום רב,
+
+    מצ"ב סיכום דוח תשלומים חודשי עבור: {current_month}.
+    
+    אנא התחבר למערכת הניהול כדי לצפות ולעדכן את הנתונים המלאים.
+
+    בברכה,
+    מערכת ניהול תשלומי אנסמבל
+    """
+
+    try:
+        msg = Message(
+            subject=f"דוח תשלומים חודשי: {current_month}",
+            recipients=[report_to],
+            body=body_content
+        )
+        mail.send(msg) 
+        
+        return redirect(url_for('index', month=current_month, message=f'✅ דוח לחודש {current_month} נשלח בהצלחה למייל {report_to}.'))
+    except Exception as e:
+        print(f"MAIL ERROR: {e}")
+        return redirect(url_for('index', month=current_month, message=f'❌ שגיאה בשליחת מייל: {e}'))
 
 
 if __name__ == '__main__':
