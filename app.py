@@ -4,13 +4,13 @@ import sqlite3
 import os
 import locale
 from datetime import datetime
+from dateutil.relativedelta import relativedelta # דורש התקנה!
 from flask_httpauth import HTTPBasicAuth 
 import git 
 from dotenv import load_dotenv 
 
 # --- טעינת משתני סביבה (לגישה ל-GIT) ---
 load_dotenv()
-# משתמש ב-os.environ.get לכל המשתנים
 GIT_TOKEN = os.environ.get("GIT_TOKEN")
 # --- סוף טעינת משתני סביבה ---
 
@@ -31,21 +31,17 @@ def setup_git_repo():
         if not os.path.exists(os.path.join(repo_path, '.git')):
             print("INFO: Initializing repository.")
             
-            # Render מעתיק את הקבצים מה-GitHub, לכן אנחנו רק צריכים לאתחל את ה-Repo המקומי
             repo = git.Repo.init(repo_path)
             
-            # הוספת ה-remote של GitHub כדי שנוכל לבצע Push
             git_url = os.environ.get('RENDER_GIT_REPO_URL') or os.environ.get('GIT_REPO_URL')
             
             if git_url and GIT_TOKEN:
-                # הוספת Token ל-URL לצורך אימות ב-Push
                 auth_url = git_url.replace("https://", f"https://oauth2:{GIT_TOKEN}@")
                 repo.create_remote('origin', auth_url)
             
         else:
             repo = git.Repo(repo_path)
 
-        # הגדרת פרטי המשתמש ל-Commit
         repo.config_writer().set_value('user', 'email', 'render-bot@example.com').release()
         repo.config_writer().set_value('user', 'name', 'Render Data Bot').release()
         return repo
@@ -59,20 +55,16 @@ def commit_data(repo, message="Data update from web app"):
         return False
         
     try:
-        # 1. מוודא שה-DB וקובץ התלמידים נמצאים תחת מעקב
         if os.path.exists(DATABASE):
             repo.index.add([DATABASE])
         if os.path.exists(STUDENT_LIST_FILE):
             repo.index.add([STUDENT_LIST_FILE])
 
-        # אם אין שינויים, לא ממשיך
-        if not repo.index.diff(None): # בדיקה מול ה-index
+        if not repo.index.diff(None):
             return True 
 
-        # 2. מבצע Commit
         repo.index.commit(message)
         
-        # 3. מבצע Push
         if GIT_TOKEN:
             repo.remote('origin').push()
             print("INFO: Data pushed to GitHub successfully.")
@@ -83,7 +75,6 @@ def commit_data(repo, message="Data update from web app"):
 
     except Exception as e:
         print(f"ERROR: Git commit/push failed: {e}")
-        # ניקוי מידע רגיש מה-remote URL במקרה של כשל
         repo.remote('origin').config_writer.set('url', repo.remote('origin').url.split('@')[-1])
         return False
 # --- סוף פונקציות GIT ---
@@ -98,8 +89,6 @@ except locale.Error:
     except:
         pass 
 
-# אתחול ה-repo לפני הפעלת האפליקציה
-# זה ירוץ פעם אחת בהפעלה הראשונה של השרת
 REPO = setup_git_repo()
 
 app = Flask(__name__)
@@ -175,7 +164,6 @@ def save_student_list(students):
     with open(STUDENT_LIST_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(cleaned_students))
     
-    # *** שמירת השינוי ב-GitHub ***
     commit_data(REPO, message="Updated student list")
 
 
@@ -189,17 +177,31 @@ if not os.path.exists(STUDENT_LIST_FILE):
 @auth.login_required
 def index():
     conn = get_db_connection()
-    
     settings = conn.execute("SELECT monthly_fee, report_email FROM settings WHERE id = 1").fetchone()
     current_master_list = load_student_list() 
     
-    months = [datetime.now().strftime("%B %Y")]
+    # --- לוגיקה לחישוב רשימת חודשים (תיקון בעיה 2) ---
+    months = set()
+    
+    # הוסף את 12 החודשים הנוכחיים והבאים
+    today = datetime.now()
+    for i in range(12): 
+        month_obj = today + relativedelta(months=i)
+        months.add(month_obj.strftime("%B %Y"))
+        
+    # הוסף חודשים מתוך מסד הנתונים (היסטוריה)
     db_months = conn.execute("SELECT DISTINCT month FROM payments ORDER BY month DESC").fetchall()
     for row in db_months:
-        if row['month'] not in months:
-            months.append(row['month'])
-            
-    current_month = request.args.get('month') or request.form.get('selected_month') or months[0]
+        months.add(row['month'])
+        
+    # ממיר ל רשימה וממיין
+    sorted_months = sorted(list(months), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=True)
+    
+    if not sorted_months:
+        sorted_months = [today.strftime("%B %Y")]
+
+    current_month = request.args.get('month') or request.form.get('selected_month') or sorted_months[0]
+    # --- סוף לוגיקת חודשים ---
     
     payments_data = {}
     db_payments = conn.execute("SELECT * FROM payments WHERE month = ?", (current_month,)).fetchall()
@@ -212,6 +214,8 @@ def index():
     final_students = sorted(list(students_with_past_data.union(set(current_master_list))))
 
     report_data = []
+    total_paid = 0 # מנגנון חישוב סה"כ (תוספת 1)
+    
     for student in final_students: 
         payment = payments_data.get(student, {})
         status = payment.get('status', 'לא שולם')
@@ -226,6 +230,9 @@ def index():
             remaining = settings['monthly_fee']
             paid_amount = 0
 
+        # עדכון הסכום הכולל שהתקבל
+        total_paid += paid_amount 
+
         report_data.append({
             'name': student,
             'status': status,
@@ -239,12 +246,13 @@ def index():
     students_text = "\n".join(load_student_list()) 
     
     return render_template('index.html', 
-                           months=months,
+                           months=sorted_months,
                            current_month=current_month,
                            settings=settings,
                            report_data=report_data,
                            status_options=STATUS_OPTIONS,
-                           students_text=students_text)
+                           students_text=students_text,
+                           total_paid=total_paid)
 
 @app.route('/update_settings', methods=['POST'])
 @auth.login_required 
@@ -259,7 +267,6 @@ def update_settings():
         conn.commit()
         conn.close()
         
-        # *** שמירת השינוי ב-GitHub ***
         commit_data(REPO, message="Updated global settings")
 
         return redirect(url_for('index', message='ההגדרות נשמרו בהצלחה!'))
@@ -303,7 +310,6 @@ def update_payments():
         conn.commit()
         conn.close()
         
-        # *** שמירת השינוי ב-GitHub ***
         commit_data(REPO, message=f"Updated payments for {current_month}")
 
         return redirect(url_for('index', month=current_month, message='התשלומים נשמרו בהצלחה!'))
@@ -316,7 +322,7 @@ def edit_students():
     students_text = request.form['students_list']
     new_students = students_text.split('\n')
     
-    save_student_list(new_students) # הפונקציה כבר עושה Commit
+    save_student_list(new_students) 
     
     return redirect(url_for('index', message='רשימת התלמידים עודכנה בהצלחה!'))
 
@@ -335,7 +341,6 @@ def delete_month():
         conn.commit()
         conn.close()
         
-        # *** שמירת השינוי ב-GitHub ***
         commit_data(REPO, message=f"Deleted data for {month_to_delete}")
         
         return redirect(url_for('index', message=f'הנתונים לחודש {month_to_delete} נמחקו בהצלחה!'))
@@ -346,9 +351,12 @@ def delete_month():
 @app.route('/send_report', methods=['POST'])
 @auth.login_required 
 def send_report():
+    # --- תיקון בעיה 3: מימוש פונקציית דמה ---
     current_month = request.form.get('month')
-    # זוהי פונקציית דמה.
-    return redirect(url_for('index', month=current_month, message=f'דוח לחודש {current_month} נשלח למייל (פונקציית דמה).'))
+    # ביישומים אמיתיים, כאן נשתמש בספריית מייל (כמו smtplib או Flask-Mail) כדי לשלוח את הנתונים למייל.
+    
+    # כרגע, אנחנו רק מדמים את השליחה ומציגים הודעה למשתמש
+    return redirect(url_for('index', month=current_month, message=f'✅ דוח לחודש {current_month} נשלח בהצלחה למייל {os.environ.get("REPORT_EMAIL", "המייל שהוגדר")}. (פעולת דמה)'))
 
 
 if __name__ == '__main__':
