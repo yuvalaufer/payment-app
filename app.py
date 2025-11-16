@@ -4,7 +4,6 @@ import sqlite3
 import os
 import locale
 from datetime import datetime, timedelta
-# שימוש ב-timedelta עבור טווח חודשים פשוט (במקום dateutil)
 from flask_httpauth import HTTPBasicAuth 
 import git 
 from dotenv import load_dotenv 
@@ -23,7 +22,7 @@ STUDENT_LIST_FILE = os.path.join(DATA_DIR, 'student_list.txt')
 DEFAULT_MONTHLY_FEE = 1000 
 STATUS_OPTIONS = ['לא שולם', 'שולם', 'שולם חלקי']
 
-# --- פונקציות GIT (תיקון שמירת הנתונים) ---
+# --- פונקציות GIT (כולל תיקון שמירת הנתונים באמצעות Pull) ---
 def setup_git_repo():
     """מאתחל את רפוזיטורי ה-Git המקומי ומושך נתונים עדכניים."""
     try:
@@ -46,9 +45,9 @@ def setup_git_repo():
             try:
                 if repo.remotes:
                     print("INFO: Pulling latest data from GitHub.")
-                    repo.remotes.origin.pull() # <-- משיכת הנתונים הקיימים
+                    # טיפול מיוחד ל-Render/GitHub:
+                    repo.git.pull('origin', repo.active_branch.name) # משיכת הנתונים הקיימים
             except Exception as e:
-                # ייתכן שאין קבצים ב-GitHub עדיין, זה בסדר
                 print(f"WARNING: Initial Git pull failed (might be first run): {e}")
 
         else:
@@ -56,7 +55,7 @@ def setup_git_repo():
             # גם בהפעלה חוזרת, מוודאים שמושכים את הנתונים העדכניים
             try:
                 print("INFO: Pulling latest data from GitHub.")
-                repo.remotes.origin.pull() # <-- משיכת הנתונים הקיימים
+                repo.git.pull('origin', repo.active_branch.name) # משיכת הנתונים הקיימים
             except Exception as e:
                 print(f"WARNING: Git pull failed: {e}")
             
@@ -98,10 +97,9 @@ def commit_data(repo, message="Data update from web app"):
 
     except Exception as e:
         print(f"ERROR: Git commit/push failed: {e}")
-        # ניקוי מידע רגיש מה-remote URL במקרה של כשל
-        # repo.remote('origin').config_writer.set('url', repo.remote('origin').url.split('@')[-1])
         return False
 # --- סוף פונקציות GIT ---
+
 
 # הגדרת שפה לעברית עבור תאריכים
 try:
@@ -201,16 +199,4 @@ if not os.path.exists(STUDENT_LIST_FILE):
 def index():
     conn = get_db_connection()
     settings = conn.execute("SELECT monthly_fee, report_email FROM settings WHERE id = 1").fetchone()
-    current_master_list = load_student_list() 
-    
-    # --- לוגיקה לחישוב רשימת חודשים (תיקון בעיה 1: סדר עולה) ---
-    months = set()
-    
-    # הוסף את 12 החודשים הנוכחיים והבאים
-    today = datetime.now()
-    # משתמשים ב-timedelta כיוון שאין dateutil
-    for i in range(12): 
-        # יצירת אובייקט תאריך עבור תחילת החודש ה-i
-        month_obj = today.replace(day=1) + timedelta(days=32 * i)
-        month_obj = month_obj.replace(day=1) 
-        months.add(month_obj.strftime("%
+    current_master
