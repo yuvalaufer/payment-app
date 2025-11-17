@@ -41,8 +41,9 @@ def init_db():
             report_email TEXT
         )
     ''')
+    # הכנסת הגדרות ברירת מחדל: 330 
     if conn.execute('SELECT COUNT(*) FROM settings').fetchone()[0] == 0:
-        conn.execute('INSERT INTO settings (monthly_fee, report_email) VALUES (?, ?)', (350, 'placeholder@example.com'))
+        conn.execute('INSERT INTO settings (monthly_fee, report_email) VALUES (?, ?)', (330, 'placeholder@example.com'))
     
     conn.commit()
     conn.close()
@@ -58,11 +59,14 @@ def get_settings(conn):
     return conn.execute('SELECT monthly_fee, report_email FROM settings WHERE id = 1').fetchone()
 
 def get_current_month_str():
+    # מחזיר את החודש הנוכחי בפורמט YYYY-MM
     return datetime.date.today().strftime("%Y-%m")
 
 def get_available_months(conn):
+    # שולף את כל החודשים עם נתונים בטבלה
     months = conn.execute('SELECT DISTINCT month FROM payments ORDER BY month DESC').fetchall()
     if not months:
+        # אם אין חודשים, מחזיר רק את החודש הנוכחי
         return [get_current_month_str()]
     return [m['month'] for m in months]
 
@@ -111,9 +115,11 @@ def index():
     months = get_available_months(conn)
     current_month = request.args.get('month')
     
+    # אם לא נבחר חודש או שהחודש הנבחר לא קיים, נשתמש בחודש הנוכחי
     if not current_month or current_month not in months:
         current_month = get_current_month_str()
         if current_month not in months:
+            # אם החודש הנוכחי עדיין לא קיים בנתונים, נוסיף אותו לרשימה שתוצג
             months.append(current_month)
 
     report_data, total_paid = get_report_data(conn, current_month)
@@ -125,7 +131,7 @@ def index():
     return render_template(
         'index.html',
         current_month=current_month,
-        months=sorted(months, reverse=True),
+        months=sorted(months, reverse=True), # מציג את החודשים מהאחרון לראשון
         report_data=report_data,
         total_paid=total_paid,
         settings=settings,
