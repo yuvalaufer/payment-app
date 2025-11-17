@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>מערכת ניהול תשלומי אנסמבל</title>
     <style>
-        /* CSS בסיסי לעברית ועיצוב */
+        /* ה-CSS המותאם אישית שלך לשמירת העיצוב המקורי */
         body { font-family: Arial, sans-serif; direction: rtl; text-align: right; margin: 20px; background-color: #f4f4f4;}
         .container { max-width: 1000px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
         h1, h2 { border-bottom: 2px solid #ccc; padding-bottom: 5px; color: #333; }
@@ -12,11 +12,12 @@
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: right; }
         th { background-color: #e9e9e9; color: #555; }
+        tfoot th { background-color: #c9e6ff; font-weight: bold; border-top: 3px double #aaa; }
         input[type="number"], input[type="email"], select, button { padding: 8px; margin-left: 10px; border-radius: 4px; border: 1px solid #ccc; }
         button { cursor: pointer; background-color: #007bff; color: white; border: none; transition: background-color 0.3s; }
         button:hover { background-color: #0056b3; }
         
-        /* צביעה לפי סטטוס */
+        /* צביעה לפי סטטוס - זה קריטי לעיצוב הטבלה */
         .status-שולם { background-color: #d4edda; color: #155724; } /* ירוק */
         .status-שולם-חלקי { background-color: #fff3cd; color: #856404; } /* צהוב */
         .status-לא-שולם { background-color: #f8d7da; color: #721c24; } /* אדום */
@@ -47,8 +48,8 @@
                 <label for="monthly_fee">סכום רצוי חודשי:</label>
                 <input type="number" id="monthly_fee" name="monthly_fee" value="{{ settings.monthly_fee }}" required>
                 
-                <label for="report_email">כתובת מייל לדוחות:</label>
-                <input type="email" id="report_email" name="report_email" value="{{ settings.report_email }}" required>
+                <input type="hidden" id="report_email" name="report_email" value="{{ settings.report_email }}">
+                <p style="color: red; margin-top: 10px;">שליחת דוחות למייל אינה פעילה כרגע.</p>
                 
                 <button type="submit">שמור הגדרות גלובליות</button>
             </form>
@@ -61,7 +62,6 @@
                     {% endfor %}
                 </select>
             </form>
-            
         </div>
 
         <div class="report-container">
@@ -94,13 +94,19 @@
                             </td>
                             <td>
                                 <input type="number" name="paid_{{ student.name }}" value="{{ student.paid_amount }}" 
-                                       class="paid-amount" data-fee="{{ student.fee }}" 
-                                       {% if student.status != 'שולם חלקי' %}disabled{% endif %} min="0" max="{{ student.fee }}">
+                                        class="paid-amount" data-fee="{{ student.fee }}" 
+                                        {% if student.status != 'שולם חלקי' %}disabled{% endif %} min="0" max="{{ student.fee }}">
                             </td>
                             <td class="remaining-cell">{{ student.remaining }} ₪</td>
                         </tr>
                         {% endfor %}
                     </tbody>
+                    <tfoot>
+                        <tr>
+                            <th colspan="3" style="text-align: left;">סה"כ תשלומים שהתקבלו לחודש זה:</th>
+                            <th colspan="2" style="text-align: right; color: #155724; background-color: #d4edda;">{{ total_paid }} ₪</th>
+                        </tr>
+                    </tfoot>
                 </table>
                 
                 <div style="margin-top: 20px; text-align: left;">
@@ -110,33 +116,31 @@
         </div>
         
         <div class="form-container" style="text-align: left;">
-            <button onclick="sendReport('{{ current_month }}')">שלח דוח עדכני לחודש {{ current_month }} למייל ({{ settings.report_email }})</button>
-            
             <button onclick="deleteData('{{ current_month }}')" style="background-color: #dc3545;">מחק נתונים לחודש: {{ current_month }}</button>
         </div>
 
     </div>
 
     <script>
-        // פונקציה לחישוב יתרת תשלום
+        // קוד ה-JavaScript שאחראי על חישוב היתרה והצבע בטבלה
         function updateRemaining(row) {
             const select = row.querySelector('.status-select');
             const paidInput = row.querySelector('.paid-amount');
             const remainingCell = row.querySelector('.remaining-cell');
             
-            // בדיקה אם האלמנטים קיימים לפני המשך
-            if (!select || !paidInput || !remainingCell) return; 
+            if (!select || !paidInput || !remainingCell) return;
             
             const fee = parseInt(paidInput.dataset.fee);
             const status = select.value;
             
-            // עדכון צבע השורה
+            // עדכון צבע השורה לפי הסטטוס
             row.className = 'status-' + status.replace(' ', '-'); 
 
             if (status === 'שולם חלקי') {
                 paidInput.disabled = false;
                 const paid = parseInt(paidInput.value) || 0;
-                const remaining = fee - paid;
+                let remaining = fee - paid;
+                if (remaining < 0) remaining = 0;
                 remainingCell.textContent = remaining + ' ₪';
             } else if (status === 'שולם') {
                 paidInput.disabled = true;
@@ -149,7 +153,7 @@
             }
         }
         
-        // איתחול והאזנה לאירועים
+        // לולאה שמפעילה את עדכון הסטטוסים
         document.querySelectorAll('tr').forEach(row => {
             const select = row.querySelector('.status-select');
             const paidInput = row.querySelector('.paid-amount');
@@ -160,36 +164,19 @@
                     updateRemaining(this.closest('tr'));
                 });
                 
-                // האזנה לשינוי סכום ששולם (רק אם סטטוס חלקי)
+                // האזנה לשינוי סכום ששולם (אך ורק אם הסטטוס הוא 'שולם חלקי')
                 paidInput.addEventListener('input', function() {
                     if (select.value === 'שולם חלקי') {
                         updateRemaining(this.closest('tr'));
                     }
                 });
                 
-                // ודא שהסכום המקסימלי מוגדר תמיד
+                // ודא שהסכום המקסימלי מוגדר
                 paidInput.setAttribute('max', paidInput.dataset.fee);
-                updateRemaining(row); // הפעלת הפונקציה באתחול לחישוב נכון
+                // הפעלת הפונקציה באתחול, כדי לצבוע את הטבלה נכון בטעינה הראשונית
+                updateRemaining(row); 
             }
         });
-        
-        // פונקציה לשליחת דוח (שולח בקשת POST לשרת)
-        function sendReport(month) {
-            if (confirm('האם אתה בטוח שברצונך לשלוח את הדוח לחודש ' + month + ' למייל ' + '{{ settings.report_email }}' + ' ?')) {
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = '{{ url_for("send_report") }}';
-                
-                const monthInput = document.createElement('input');
-                monthInput.type = 'hidden';
-                monthInput.name = 'month';
-                monthInput.value = month;
-                form.appendChild(monthInput);
-                
-                document.body.appendChild(form);
-                form.submit();
-            }
-        }
         
         // פונקציה למחיקת נתונים
         function deleteData(month) {
@@ -212,4 +199,3 @@
     </script>
 </body>
 </html>
-
