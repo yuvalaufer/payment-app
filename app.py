@@ -7,9 +7,8 @@ from datetime import datetime, timedelta
 from flask_httpauth import HTTPBasicAuth 
 import git 
 from dotenv import load_dotenv 
-from flask_mail import Mail, Message
 
-# --- טעינת משתני סביבה (לגישה ל-GIT ולמייל) ---
+# --- טעינת משתני סביבה (לגישה ל-GIT) ---
 load_dotenv()
 GIT_TOKEN = os.environ.get("GIT_TOKEN")
 # --- סוף טעינת משתני סביבה ---
@@ -20,7 +19,7 @@ DATABASE = os.path.join(DATA_DIR, 'payments.db')
 STUDENT_LIST_FILE = os.path.join(DATA_DIR, 'student_list.txt')
 # --- סוף הגדרות נתיבים ---
 
-DEFAULT_MONTHLY_FEE = 330 # <--- **העדכון לסכום הדיפולט**
+DEFAULT_MONTHLY_FEE = 330
 STATUS_OPTIONS = ['לא שולם', 'שולם', 'שולם חלקי']
 
 # --- פונקציות GIT ---
@@ -111,23 +110,6 @@ REPO = setup_git_repo()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '1A2B3C4D5E6F7G8H9I0J_SUPER_SECRET' 
-
-# ----------------------------------------------------
-#               הגדרות Flask-Mail (מתוקן לטיפול ב-Timeout)
-# ----------------------------------------------------
-app.config['MAIL_SERVER'] = os.environ.get('SMTP_SERVER')
-app.config['MAIL_PORT'] = int(os.environ.get('SMTP_PORT', 587))
-
-# נשתמש ב-TLS אם הפורט הוא 587, אחרת לא נגדיר (או SSL)
-app.config['MAIL_USE_TLS'] = (app.config['MAIL_PORT'] == 587) 
-app.config['MAIL_USE_SSL'] = (app.config['MAIL_PORT'] == 465)
-
-app.config['MAIL_USERNAME'] = os.environ.get('EMAIL_SENDER')
-app.config['MAIL_PASSWORD'] = os.environ.get('EMAIL_PASSWORD')
-app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('EMAIL_SENDER')
-
-mail = Mail(app) # <--- אתחול Mail
-# ----------------------------------------------------
 
 # ----------------------------------------------------
 #               הגדרת אימות (Basic Auth)
@@ -382,51 +364,8 @@ def delete_month():
     except Exception as e:
         return f"אירעה שגיאה במחיקת נתונים: {e}", 500
 
-
-@app.route('/send_report', methods=['POST'])
-@auth.login_required 
-def send_report():
-    current_month = request.form.get('month')
-    receiver_email = os.environ.get("REPORT_EMAIL") 
-    sender_email = os.environ.get("EMAIL_SENDER")
-    
-    conn = get_db_connection()
-    settings = conn.execute("SELECT report_email FROM settings WHERE id = 1").fetchone()
-    conn.close()
-    
-    report_to = settings['report_email'] if settings and settings['report_email'] else receiver_email
-
-    if not report_to or not sender_email:
-        return redirect(url_for('index', month=current_month, message='❌ שגיאה: לא הוגדר מייל נמען או שולח!'))
-
-    body_content = f"""
-    שלום רב,
-
-    מצ"ב סיכום דוח תשלומים חודשי עבור: {current_month}.
-    
-    אנא התחבר למערכת הניהול כדי לצפות ולעדכן את הנתונים המלאים.
-
-    בברכה,
-    מערכת ניהול תשלומי אנסמבל
-    """
-
-    try:
-        msg = Message(
-            subject=f"דוח תשלומים חודשי: {current_month}",
-            recipients=[report_to],
-            body=body_content
-        )
-        mail.send(msg) 
-        
-        return redirect(url_for('index', month=current_month, message=f'✅ דוח לחודש {current_month} נשלח בהצלחה למייל {report_to}.'))
-    except Exception as e:
-        # הודעה זו תופיע ביומן Render
-        print(f"MAIL ERROR: {e}")
-        # הודעה זו תופיע למשתמש
-        return redirect(url_for('index', month=current_month, message=f'❌ שגיאה בשליחת מייל. (האם סיסמת היישום נכונה?): {e}'))
-
+# *** הוסר הניתוב /send_report ***
 
 if __name__ == '__main__':
     app.run(debug=True)
-
 #end app.py
