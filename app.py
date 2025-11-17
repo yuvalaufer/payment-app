@@ -1,3 +1,5 @@
+# app.py
+
 import sqlite3
 import datetime
 from flask import Flask, render_template, request, redirect, url_for
@@ -13,15 +15,14 @@ def get_db_connection():
     return conn
 
 def init_db():
+    # פונקציה ליצירת טבלאות אם אינן קיימות
     conn = get_db_connection()
-    # יצירת טבלת students
     conn.execute('''
         CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE NOT NULL
         )
     ''')
-    # יצירת טבלת payments
     conn.execute('''
         CREATE TABLE IF NOT EXISTS payments (
             month TEXT NOT NULL,
@@ -31,7 +32,6 @@ def init_db():
             PRIMARY KEY (month, student_name)
         )
     ''')
-    # יצירת טבלת settings
     conn.execute('''
         CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY,
@@ -86,6 +86,7 @@ def get_report_data(conn, month):
             status = 'לא שולם'
             paid_amount = 0
 
+        # חישוב יתרה
         remaining = monthly_fee - paid_amount
         if remaining < 0: remaining = 0
         
@@ -101,7 +102,8 @@ def get_report_data(conn, month):
         
     return report_data, total_paid
 
-# ניתוב ראשי
+# --- ניתובים (Routes) ---
+
 @app.route('/')
 def index():
     conn = get_db_connection()
@@ -131,11 +133,10 @@ def index():
         status_options=STATUS_OPTIONS
     )
 
-# ניתוב לעדכון הגדרות
 @app.route('/update_settings', methods=['POST'])
 def update_settings():
     monthly_fee = request.form['monthly_fee']
-    # שדה המייל לא נדרש יותר
+    # שמירה של שדה המייל הישן (שנשלח כ-Hidden Input מה-HTML)
     report_email = request.form.get('report_email', 'placeholder@example.com') 
     
     conn = get_db_connection()
@@ -148,73 +149,6 @@ def update_settings():
 
     return redirect(url_for('index', message='ההגדרות עודכנו בהצלחה!'))
 
-# ניתוב לעדכון רשימת תלמידים
 @app.route('/edit_students', methods=['POST'])
 def edit_students():
-    students_text = request.form['students_list'].strip()
-    new_students = [name.strip() for name in students_text.split('\n') if name.strip()]
-
-    conn = get_db_connection()
-    old_students = get_students(conn)
-    
-    # זיהוי תלמידים להסרה
-    students_to_remove = set(old_students) - set(new_students)
-    
-    # הסרת תלמידים ישנים ותשלומיהם
-    for name in students_to_remove:
-        conn.execute('DELETE FROM students WHERE name = ?', (name,))
-        conn.execute('DELETE FROM payments WHERE student_name = ?', (name,))
-
-    # הוספת תלמידים חדשים (התעלם מקיימים)
-    for name in new_students:
-        conn.execute('INSERT OR IGNORE INTO students (name) VALUES (?)', (name,))
-        
-    conn.commit()
-    conn.close()
-
-    return redirect(url_for('index', message='רשימת התלמידים עודכנה בהצלחה!'))
-
-# ניתוב לעדכון תשלומים
-@app.route('/update_payments', methods=['POST'])
-def update_payments():
-    month = request.form['month']
-    conn = get_db_connection()
-    students = get_students(conn)
-    
-    for name in students:
-        status = request.form.get(f'status_{name}')
-        paid_amount_str = request.form.get(f'paid_{name}', '0')
-        
-        try:
-            paid_amount = int(paid_amount_str)
-        except ValueError:
-            paid_amount = 0
-
-        # הכנסה או עדכון של נתוני תשלום
-        conn.execute(
-            '''
-            INSERT OR REPLACE INTO payments 
-            (month, student_name, status, paid_amount) 
-            VALUES (?, ?, ?, ?)
-            ''',
-            (month, name, status, paid_amount)
-        )
-        
-    conn.commit()
-    conn.close()
-
-    return redirect(url_for('index', month=month, message=f'תשלומי חודש {month} עודכנו בהצלחה!'))
-
-# ניתוב למחיקת חודש
-@app.route('/delete_month', methods=['POST'])
-def delete_month():
-    month_to_delete = request.form['month_to_delete']
-    conn = get_db_connection()
-    conn.execute('DELETE FROM payments WHERE month = ?', (month_to_delete,))
-    conn.commit()
-    conn.close()
-
-    return redirect(url_for('index', message=f'נתוני התשלום לחודש {month_to_delete} נמחקו בהצלחה.'))
-
-if __name__ == '__main__':
-    app.run(debug=True)
+    students_text = request.form['students_list
