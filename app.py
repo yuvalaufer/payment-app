@@ -113,11 +113,15 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = '1A2B3C4D5E6F7G8H9I0J_SUPER_SECRET' 
 
 # ----------------------------------------------------
-#               הגדרות Flask-Mail
+#               הגדרות Flask-Mail (מתוקן לטיפול ב-Timeout)
 # ----------------------------------------------------
 app.config['MAIL_SERVER'] = os.environ.get('SMTP_SERVER')
 app.config['MAIL_PORT'] = int(os.environ.get('SMTP_PORT', 587))
-app.config['MAIL_USE_TLS'] = True
+
+# נשתמש ב-TLS אם הפורט הוא 587, אחרת לא נגדיר (או SSL)
+app.config['MAIL_USE_TLS'] = (app.config['MAIL_PORT'] == 587) 
+app.config['MAIL_USE_SSL'] = (app.config['MAIL_PORT'] == 465)
+
 app.config['MAIL_USERNAME'] = os.environ.get('EMAIL_SENDER')
 app.config['MAIL_PASSWORD'] = os.environ.get('EMAIL_PASSWORD')
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('EMAIL_SENDER')
@@ -416,8 +420,10 @@ def send_report():
         
         return redirect(url_for('index', month=current_month, message=f'✅ דוח לחודש {current_month} נשלח בהצלחה למייל {report_to}.'))
     except Exception as e:
+        # הודעה זו תופיע ביומן Render
         print(f"MAIL ERROR: {e}")
-        return redirect(url_for('index', month=current_month, message=f'❌ שגיאה בשליחת מייל: {e}'))
+        # הודעה זו תופיע למשתמש
+        return redirect(url_for('index', month=current_month, message=f'❌ שגיאה בשליחת מייל. (האם סיסמת היישום נכונה?): {e}'))
 
 
 if __name__ == '__main__':
