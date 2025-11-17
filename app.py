@@ -276,15 +276,16 @@ def index():
 def update_settings():
     try:
         new_fee = int(request.form['monthly_fee'])
-        new_email = request.form['report_email']
+        # הוסרה שורת עדכון ה-email מ-request.form
         
         conn = get_db_connection()
-        conn.execute("UPDATE settings SET monthly_fee = ?, report_email = ? WHERE id = 1",
-                     (new_fee, new_email))
+        # עדכון רק של monthly_fee ב-settings
+        conn.execute("UPDATE settings SET monthly_fee = ? WHERE id = 1",
+                     (new_fee,))
         conn.commit()
         conn.close()
         
-        commit_data(REPO, message="Updated global settings")
+        commit_data(REPO, message="Updated global settings (fee only)")
 
         return redirect(url_for('index', message='ההגדרות נשמרו בהצלחה!'))
     except Exception as e:
@@ -364,7 +365,7 @@ def delete_month():
     except Exception as e:
         return f"אירעה שגיאה במחיקת נתונים: {e}", 500
 
-# *** הוסר הניתוב /send_report ***
+# *** הוסר לחלוטין הניתוב /send_report ***
 
 if __name__ == '__main__':
     app.run(debug=True)
