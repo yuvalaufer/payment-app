@@ -1,135 +1,12 @@
-# app.py
-from flask import Flask, render_template, request, redirect, url_for, jsonify
 import sqlite3
-import os
-import locale
-from datetime import datetime, timedelta
-from flask_httpauth import HTTPBasicAuth 
-import git 
-from dotenv import load_dotenv 
-
-# --- טעינת משתני סביבה (לגישה ל-GIT) ---
-load_dotenv()
-GIT_TOKEN = os.environ.get("GIT_TOKEN")
-# --- סוף טעינת משתני סביבה ---
-
-# --- הגדרות נתיבים ---
-DATA_DIR = '.' 
-DATABASE = os.path.join(DATA_DIR, 'payments.db')
-STUDENT_LIST_FILE = os.path.join(DATA_DIR, 'student_list.txt')
-# --- סוף הגדרות נתיבים ---
-
-DEFAULT_MONTHLY_FEE = 330
-STATUS_OPTIONS = ['לא שולם', 'שולם', 'שולם חלקי']
-
-# --- פונקציות GIT ---
-def setup_git_repo():
-    """מאתחל את רפוזיטורי ה-Git המקומי ומושך נתונים עדכניים."""
-    try:
-        repo_path = os.getcwd()
-        repo = None
-        
-        # 1. אתחול/טעינת הרפוזיטורי
-        if not os.path.exists(os.path.join(repo_path, '.git')):
-            print("INFO: Initializing new repository.")
-            repo = git.Repo.init(repo_path)
-            
-            git_url = os.environ.get('RENDER_GIT_REPO_URL') or os.environ.get('GIT_REPO_URL')
-            
-            if git_url and GIT_TOKEN:
-                auth_url = git_url.replace("https://", f"https://oauth2:{GIT_TOKEN}@")
-                repo.create_remote('origin', auth_url)
-                
-            try:
-                if repo.remotes:
-                    print("INFO: Pulling latest data from GitHub.")
-                    repo.remotes.origin.pull() 
-            except Exception as e:
-                print(f"WARNING: Initial Git pull failed (might be first run): {e}")
-
-        else:
-            repo = git.Repo(repo_path)
-            # 2. תיקון: משיכת נתונים רק אם לא במצב detached HEAD
-            try:
-                if not repo.head.is_detached:
-                    print("INFO: Pulling latest data from GitHub.")
-                    repo.remotes.origin.pull() 
-                else:
-                    print("WARNING: Git is in detached HEAD state. Skipping pull at startup.")
-            except Exception as e:
-                print(f"WARNING: Git pull failed: {e}")
-            
-        # 3. הגדרת פרטי המשתמש ל-Commit
-        repo.config_writer().set_value('user', 'email', 'render-bot@example.com').release()
-        repo.config_writer().set_value('user', 'name', 'Render Data Bot').release()
-        return repo
-    except Exception as e:
-        print(f"ERROR: Git setup failed: {e}")
-        return None
-
-def commit_data(repo, message="Data update from web app"):
-    """שומר את קבצי הנתונים ב-GitHub."""
-    if not repo:
-        return False
-        
-    try:
-        if os.path.exists(DATABASE):
-            repo.index.add([DATABASE])
-        if os.path.exists(STUDENT_LIST_FILE):
-            repo.index.add([STUDENT_LIST_FILE])
-
-        if not repo.index.diff(None):
-            return True 
-
-        repo.index.commit(message)
-        
-        if GIT_TOKEN:
-            repo.remote('origin').push()
-            print("INFO: Data pushed to GitHub successfully.")
-            return True
-        else:
-            print("ERROR: GIT_TOKEN not set for push.")
-            return False
-
-    except Exception as e:
-        print(f"ERROR: Git commit/push failed: {e}")
-        return False
-# --- סוף פונקציות GIT ---
-
-
-# הגדרת שפה לעברית עבור תאריכים
-try:
-    locale.setlocale(locale.LC_ALL, 'he_IL.UTF-8')
-except locale.Error:
-    try:
-        locale.setlocale(locale.LC_ALL, 'he_IL')
-    except:
-        pass 
-
-REPO = setup_git_repo()
+import datetime
+from flask import Flask, render_template, request, redirect, url_for
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = '1A2B3C4D5E6F7G8H9I0J_SUPER_SECRET' 
+app.secret_key = 'your_secret_key' # נדרש לשמירת סשנים/הודעות
+DATABASE = 'payments.db'
+STATUS_OPTIONS = ['שולם', 'שולם חלקי', 'לא שולם']
 
-# ----------------------------------------------------
-#               הגדרת אימות (Basic Auth)
-# ----------------------------------------------------
-
-auth = HTTPBasicAuth()
-USERS = {
-    os.environ.get("ADMIN_USER", "admin_default"): os.environ.get("ADMIN_PASS", "default_pass") 
-}
-
-@auth.verify_password
-def verify_password(username, password):
-    # חוסם התחברות עם סיסמת הדיפולט מחשש אבטחה
-    if username in USERS and USERS.get(username) == password and password != "default_pass":
-        return username
-    return None
-
-# ----------------------------------------------------
-
-# --- פונקציות עזר לבסיס הנתונים ---
 def get_db_connection():
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
@@ -137,236 +14,207 @@ def get_db_connection():
 
 def init_db():
     conn = get_db_connection()
-    c = conn.cursor()
-    
-    # 1. טבלת הגדרות גלובליות
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY,
-            monthly_fee INTEGER,
-            report_email TEXT
+    # יצירת טבלת students
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL
         )
-    """)
-    
-    c.execute("SELECT COUNT(*) FROM settings")
-    if c.fetchone()[0] == 0:
-        # משתמש ב-DEFAULT_MONTHLY_FEE = 330
-        c.execute("INSERT INTO settings (id, monthly_fee, report_email) VALUES (1, ?, ?)", 
-                  (DEFAULT_MONTHLY_FEE, 'your_email@example.com'))
-
-    # 2. טבלת נתוני תשלומים פר חודש
-    c.execute("""
+    ''')
+    # יצירת טבלת payments
+    conn.execute('''
         CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY,
             month TEXT NOT NULL,
             student_name TEXT NOT NULL,
-            status TEXT DEFAULT 'לא שולם',
-            paid_amount INTEGER DEFAULT 0,
-            UNIQUE(month, student_name)
+            status TEXT NOT NULL,
+            paid_amount INTEGER NOT NULL,
+            PRIMARY KEY (month, student_name)
         )
-    """)
+    ''')
+    # יצירת טבלת settings
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY,
+            monthly_fee INTEGER NOT NULL,
+            report_email TEXT
+        )
+    ''')
+    # הכנסת הגדרות ברירת מחדל אם הטבלה ריקה
+    if conn.execute('SELECT COUNT(*) FROM settings').fetchone()[0] == 0:
+        conn.execute('INSERT INTO settings (monthly_fee, report_email) VALUES (?, ?)', (350, 'placeholder@example.com'))
+    
     conn.commit()
     conn.close()
 
 init_db()
 
+# פונקציות עזר 
+def get_students(conn):
+    students = conn.execute('SELECT name FROM students ORDER BY name').fetchall()
+    return [s['name'] for s in students]
 
-# --- פונקציות עזר לקבצים ---
-def load_student_list():
-    if not os.path.exists(STUDENT_LIST_FILE):
-        return []
-    with open(STUDENT_LIST_FILE, 'r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
+def get_settings(conn):
+    return conn.execute('SELECT monthly_fee, report_email FROM settings WHERE id = 1').fetchone()
 
-def save_student_list(students):
-    cleaned_students = [s.strip() for s in students if s.strip()] 
-    with open(STUDENT_LIST_FILE, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(cleaned_students))
-    
-    commit_data(REPO, message="Updated student list")
+def get_current_month_str():
+    return datetime.date.today().strftime("%Y-%m")
 
+def get_available_months(conn):
+    months = conn.execute('SELECT DISTINCT month FROM payments ORDER BY month DESC').fetchall()
+    if not months:
+        return [get_current_month_str()]
+    return [m['month'] for m in months]
 
-if not os.path.exists(STUDENT_LIST_FILE):
-    save_student_list(["דוגמא אברהם", "לוי משה", "כהן שרה"])
+def get_report_data(conn, month):
+    settings = get_settings(conn)
+    monthly_fee = settings['monthly_fee']
     
-    
-# --- ניתובים (Routes) ---
-
-@app.route('/', methods=['GET', 'POST'])
-@auth.login_required
-def index():
-    conn = get_db_connection()
-    settings = conn.execute("SELECT monthly_fee, report_email FROM settings WHERE id = 1").fetchone()
-    current_master_list = load_student_list() 
-    
-    # --- לוגיקה לחישוב רשימת חודשים (סדר עולה) ---
-    months = set()
-    
-    today = datetime.now()
-    for i in range(12): 
-        month_obj = today.replace(day=1) + timedelta(days=32 * i)
-        month_obj = month_obj.replace(day=1) 
-        months.add(month_obj.strftime("%B %Y"))
-        
-    db_months = conn.execute("SELECT DISTINCT month FROM payments").fetchall()
-    for row in db_months:
-        months.add(row['month'])
-        
-    sorted_months = sorted(list(months), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=False) 
-    
-    if not sorted_months:
-        sorted_months = [today.strftime("%B %Y")]
-
-    current_month = request.args.get('month') or request.form.get('selected_month') or sorted_months[-1]
-    # --- סוף לוגיקת חודשים ---
-    
-    payments_data = {}
-    db_payments = conn.execute("SELECT * FROM payments WHERE month = ?", (current_month,)).fetchall()
-    
-    students_with_past_data = set()
-    for row in db_payments:
-        payments_data[row['student_name']] = dict(row)
-        students_with_past_data.add(row['student_name'])
-
-    # רשימה סופית: תלמידי מאסטר נוכחיים + תלמידים עם היסטוריית תשלום לחודש זה (להקפאת הרכב התלמידים)
-    final_students = sorted(list(students_with_past_data.union(set(current_master_list))))
-
+    students = get_students(conn)
     report_data = []
-    total_paid = 0 
-    
-    for student in final_students: 
-        payment = payments_data.get(student, {})
-        status = payment.get('status', 'לא שולם')
-        paid_amount = payment.get('paid_amount', 0)
-        
-        if status == 'שולם':
-            remaining = 0
-            paid_amount = settings['monthly_fee']
-        elif status == 'שולם חלקי':
-            remaining = settings['monthly_fee'] - paid_amount
+    total_paid = 0
+
+    for name in students:
+        payment = conn.execute(
+            'SELECT status, paid_amount FROM payments WHERE month = ? AND student_name = ?',
+            (month, name)
+        ).fetchone()
+
+        if payment:
+            status = payment['status']
+            paid_amount = payment['paid_amount']
         else:
-            remaining = settings['monthly_fee']
+            status = 'לא שולם'
             paid_amount = 0
 
-        total_paid += paid_amount 
+        remaining = monthly_fee - paid_amount
+        if remaining < 0: remaining = 0
+        
+        total_paid += paid_amount
 
         report_data.append({
-            'name': student,
+            'name': name,
+            'fee': monthly_fee,
             'status': status,
             'paid_amount': paid_amount,
-            'remaining': remaining,
-            'fee': settings['monthly_fee'] 
+            'remaining': remaining
         })
-
-    conn.close()
-    
-    students_text = "\n".join(load_student_list()) 
-    
-    return render_template('index.html', 
-                           months=sorted_months,
-                           current_month=current_month,
-                           settings=settings,
-                           report_data=report_data,
-                           status_options=STATUS_OPTIONS,
-                           students_text=students_text,
-                           total_paid=total_paid)
-
-@app.route('/update_settings', methods=['POST'])
-@auth.login_required 
-def update_settings():
-    try:
-        new_fee = int(request.form['monthly_fee'])
-        # הוסרה שורת עדכון ה-email מ-request.form
         
-        conn = get_db_connection()
-        # עדכון רק של monthly_fee ב-settings
-        conn.execute("UPDATE settings SET monthly_fee = ? WHERE id = 1",
-                     (new_fee,))
-        conn.commit()
-        conn.close()
-        
-        commit_data(REPO, message="Updated global settings (fee only)")
+    return report_data, total_paid
 
-        return redirect(url_for('index', message='ההגדרות נשמרו בהצלחה!'))
-    except Exception as e:
-        return f"אירעה שגיאה בעת שמירת ההגדרות: {e}", 500
-
-@app.route('/update_payments', methods=['POST'])
-@auth.login_required 
-def update_payments():
-    current_month = request.form['month']
-    students = load_student_list()
+# ניתוב ראשי
+@app.route('/')
+def index():
     conn = get_db_connection()
     
-    try:
-        settings = conn.execute("SELECT monthly_fee FROM settings WHERE id = 1").fetchone()
-        monthly_fee = settings['monthly_fee']
-        
-        db_payments = conn.execute("SELECT * FROM payments WHERE month = ?", (current_month,)).fetchall()
-        students_with_past_data = set(row['student_name'] for row in db_payments)
-        final_students = students_with_past_data.union(set(students))
+    months = get_available_months(conn)
+    current_month = request.args.get('month')
+    
+    if not current_month or current_month not in months:
+        current_month = get_current_month_str()
+        if current_month not in months:
+            months.append(current_month)
 
-        for student in final_students:
-            status = request.form.get(f'status_{student}')
-            paid_amount_str = request.form.get(f'paid_{student}')
-            
-            if not status:
-                continue
+    report_data, total_paid = get_report_data(conn, current_month)
+    settings = get_settings(conn)
+    students_text = "\n".join(get_students(conn))
+    
+    conn.close()
 
-            paid_amount = int(paid_amount_str) if paid_amount_str and paid_amount_str.isdigit() else 0
+    return render_template(
+        'index.html',
+        current_month=current_month,
+        months=sorted(months, reverse=True),
+        report_data=report_data,
+        total_paid=total_paid,
+        settings=settings,
+        students_text=students_text,
+        status_options=STATUS_OPTIONS
+    )
 
-            if status == 'שולם':
-                paid_amount = monthly_fee
-            elif status == 'לא שולם':
-                paid_amount = 0
+# ניתוב לעדכון הגדרות
+@app.route('/update_settings', methods=['POST'])
+def update_settings():
+    monthly_fee = request.form['monthly_fee']
+    # שדה המייל לא נדרש יותר
+    report_email = request.form.get('report_email', 'placeholder@example.com') 
+    
+    conn = get_db_connection()
+    conn.execute(
+        'UPDATE settings SET monthly_fee = ?, report_email = ? WHERE id = 1',
+        (monthly_fee, report_email)
+    )
+    conn.commit()
+    conn.close()
 
-            conn.execute("""
-                INSERT OR REPLACE INTO payments (month, student_name, status, paid_amount)
-                VALUES (?, ?, ?, ?)
-            """, (current_month, student, status, paid_amount))
-            
-        conn.commit()
-        conn.close() 
+    return redirect(url_for('index', message='ההגדרות עודכנו בהצלחה!'))
 
-        commit_data(REPO, message=f"Updated payments for {current_month}")
-
-        return redirect(url_for('index', month=current_month, message='התשלומים נשמרו בהצלחה!'))
-    except Exception as e:
-        return f"אירעה שגיאה בעת שמירת התשלומים: {e}", 500
-
+# ניתוב לעדכון רשימת תלמידים
 @app.route('/edit_students', methods=['POST'])
-@auth.login_required
 def edit_students():
-    students_text = request.form['students_list']
-    new_students = students_text.split('\n')
+    students_text = request.form['students_list'].strip()
+    new_students = [name.strip() for name in students_text.split('\n') if name.strip()]
+
+    conn = get_db_connection()
+    old_students = get_students(conn)
     
-    save_student_list(new_students) 
+    # זיהוי תלמידים להסרה
+    students_to_remove = set(old_students) - set(new_students)
     
+    # הסרת תלמידים ישנים ותשלומיהם
+    for name in students_to_remove:
+        conn.execute('DELETE FROM students WHERE name = ?', (name,))
+        conn.execute('DELETE FROM payments WHERE student_name = ?', (name,))
+
+    # הוספת תלמידים חדשים (התעלם מקיימים)
+    for name in new_students:
+        conn.execute('INSERT OR IGNORE INTO students (name) VALUES (?)', (name,))
+        
+    conn.commit()
+    conn.close()
+
     return redirect(url_for('index', message='רשימת התלמידים עודכנה בהצלחה!'))
 
-
-@app.route('/delete_month', methods=['POST'])
-@auth.login_required 
-def delete_month():
-    month_to_delete = request.form.get('month_to_delete')
-    
-    if not month_to_delete:
-        return "שם החודש אינו חוקי.", 400
-        
+# ניתוב לעדכון תשלומים
+@app.route('/update_payments', methods=['POST'])
+def update_payments():
+    month = request.form['month']
     conn = get_db_connection()
-    try:
-        conn.execute("DELETE FROM payments WHERE month = ?", (month_to_delete,))
-        conn.commit()
-        conn.close()
+    students = get_students(conn)
+    
+    for name in students:
+        status = request.form.get(f'status_{name}')
+        paid_amount_str = request.form.get(f'paid_{name}', '0')
         
-        commit_data(REPO, message=f"Deleted data for {month_to_delete}")
-        
-        return redirect(url_for('index', message=f'הנתונים לחודש {month_to_delete} נמחקו בהצלחה!'))
-    except Exception as e:
-        return f"אירעה שגיאה במחיקת נתונים: {e}", 500
+        try:
+            paid_amount = int(paid_amount_str)
+        except ValueError:
+            paid_amount = 0
 
-# *** הוסר לחלוטין הניתוב /send_report ***
+        # הכנסה או עדכון של נתוני תשלום
+        conn.execute(
+            '''
+            INSERT OR REPLACE INTO payments 
+            (month, student_name, status, paid_amount) 
+            VALUES (?, ?, ?, ?)
+            ''',
+            (month, name, status, paid_amount)
+        )
+        
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('index', month=month, message=f'תשלומי חודש {month} עודכנו בהצלחה!'))
+
+# ניתוב למחיקת חודש
+@app.route('/delete_month', methods=['POST'])
+def delete_month():
+    month_to_delete = request.form['month_to_delete']
+    conn = get_db_connection()
+    conn.execute('DELETE FROM payments WHERE month = ?', (month_to_delete,))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('index', message=f'נתוני התשלום לחודש {month_to_delete} נמחקו בהצלחה.'))
 
 if __name__ == '__main__':
     app.run(debug=True)
-#end app.py
