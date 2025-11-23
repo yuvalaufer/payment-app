@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from flask_httpauth import HTTPBasicAuth 
 import git 
 from dotenv import load_dotenv 
-# Flask-Mail וייבוא המייל הוסרו
 
 # --- טעינת משתני סביבה (לגישה ל-GIT) ---
 load_dotenv()
@@ -72,6 +71,34 @@ def setup_git_repo():
     except Exception as e:
         print(f"FATAL ERROR: Git setup failed entirely: {e}")
         return None
+
+def commit_data(repo, message="Data update from web app"):
+    """שומר את קבצי הנתונים ב-GitHub."""
+    if not repo:
+        return False
+        
+    try:
+        if os.path.exists(DATABASE):
+            repo.index.add([DATABASE])
+        if os.path.exists(STUDENT_LIST_FILE):
+            repo.index.add([STUDENT_LIST_FILE])
+
+        if not repo.index.diff(None):
+            return True 
+
+        repo.index.commit(message)
+        
+        if GIT_TOKEN:
+            repo.remote('origin').push()
+            print("INFO: Data pushed to GitHub successfully.")
+            return True
+        else:
+            print("ERROR: GIT_TOKEN not set for push.")
+            return False
+
+    except Exception as e:
+        print(f"ERROR: Git commit/push failed: {e}")
+        return False
 # --- סוף פונקציות GIT ---
 
 
@@ -294,7 +321,7 @@ def update_payments():
 
             if status == 'שולם':
                 paid_amount = monthly_fee
-            elif status == 'לא שולם':
+            elif status == 'שולם חלקי':
                 paid_amount = 0
 
             conn.execute("""
@@ -353,3 +380,4 @@ def send_report():
 
 if __name__ == '__main__':
     app.run(debug=True)
+# end app.py
