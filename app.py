@@ -27,6 +27,7 @@ STATUS_OPTIONS = ['לא שולם', 'שולם', 'שולם חלקי']
 REPO = None 
 # 🚨 הוספת פונקציה לבדיקה וטעינה עצלה של REPO
 def get_repo():
+    """מאתחל או מחזיר את אובייקט ה-Git Repo המאומת."""
     global REPO
     if REPO is None:
         REPO = setup_git_repo()
@@ -67,6 +68,7 @@ def setup_git_repo():
             try:
                 if repo and repo.remotes:
                     print("INFO: Attempting Git FETCH to verify authentication.")
+                    # שימוש ב-fetch() במקום pull() כדי לקבל אינדיקציה ברורה יותר לשגיאת אימות
                     repo.remotes.origin.fetch()
                     
                     # אם ה-fetch הצליח, נבצע checkout
@@ -79,7 +81,8 @@ def setup_git_repo():
                             print(f"INFO: Successfully checked out branch: {branch_name}")
                         else:
                             print("ERROR: Could not determine primary branch name (main/master).")
-                            repo.remotes.origin.pull()
+                            repo.remotes.origin.pull() # fallback to pull
+                    
                     
             except Exception as e:
                 # 🚨 זו השורה הקריטית שתספר לנו אם ה-TOKEN או ה-URL שגויים
@@ -106,7 +109,7 @@ def setup_git_repo():
 
 def commit_data(repo_instance, message="Data update from web app"):
     """שומר את קבצי הנתונים ב-GitHub."""
-    if not repo_instance: # שינוי: קורא ל-repo_instance במקום REPO גלובלי
+    if not repo_instance: 
         return False
         
     try:
@@ -146,7 +149,8 @@ except locale.Error:
 print(f"DEBUG CHECK: GIT_TOKEN is set: {bool(GIT_TOKEN)}")
 print(f"DEBUG CHECK: GIT_REPO_URL is set: {bool(GIT_REPO_URL)}") 
 
-# 🚨 REPO לא נקרא כאן יותר, הוא נקרא דרך get_repo()
+# 🚨 קריאה כפויה ל-Git Setup מיד לאחר בדיקת המשתנים
+get_repo() 
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '1A2B3C4D5E6F7G8H9I0J_SUPER_SECRET' 
@@ -222,12 +226,10 @@ def save_student_list(students):
     with open(STUDENT_LIST_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(cleaned_students))
     
-    # שינוי: קורא ל-get_repo()
     commit_data(get_repo(), message="Updated student list")
 
 
 if not os.path.exists(STUDENT_LIST_FILE):
-    # שינוי: קורא ל-get_repo()
     save_student_list(["דוגמא אברהם", "לוי משה", "כהן שרה"])
     
     
@@ -237,9 +239,6 @@ if not os.path.exists(STUDENT_LIST_FILE):
 @auth.login_required
 def index():
     conn = get_db_connection()
-    # ... (שאר הפונקציה ללא שינוי מהותי)
-
-    # ... (שאר הקוד ב-index)
     settings = conn.execute("SELECT monthly_fee, report_email FROM settings WHERE id = 1").fetchone()
     current_master_list = load_student_list() 
     
@@ -328,7 +327,6 @@ def update_settings():
         conn.commit()
         conn.close()
         
-        # שינוי: קורא ל-get_repo()
         commit_data(get_repo(), message="Updated global settings")
 
         return redirect(url_for('index', message='ההגדרות נשמרו בהצלחה!'))
@@ -350,76 +348,4 @@ def update_payments():
         students_with_past_data = set(row['student_name'] for row in db_payments)
         final_students = students_with_past_data.union(set(students))
 
-        for student in final_students:
-            status = request.form.get(f'status_{student}')
-            paid_amount_str = request.form.get(f'paid_{student}')
-            
-            if not status:
-                continue
-
-            paid_amount = int(paid_amount_str) if paid_amount_str and paid_amount_str.isdigit() else 0
-
-            if status == 'שולם':
-                paid_amount = monthly_fee
-            elif status == 'שולם חלקי':
-                paid_amount = 0
-
-            conn.execute("""
-                INSERT OR REPLACE INTO payments (month, student_name, status, paid_amount)
-                VALUES (?, ?, ?, ?)
-            """, (current_month, student, status, paid_amount))
-            
-        conn.commit()
-        conn.close() 
-
-        # שינוי: קורא ל-get_repo()
-        commit_data(get_repo(), message=f"Updated payments for {current_month}")
-
-        return redirect(url_for('index', month=current_month, message='התשלומים נשמרו בהצלחה!'))
-    except Exception as e:
-        return f"אירעה שגיאה בעת שמירת התשלומים: {e}", 500
-
-@app.route('/edit_students', methods=['POST'])
-@auth.login_required
-def edit_students():
-    students_text = request.form['students_list']
-    new_students = students_text.split('\n')
-    
-    # שינוי: קורא ל-get_repo()
-    save_student_list(new_students) 
-    
-    return redirect(url_for('index', message='רשימת התלמידים עודכנה בהצלחה!'))
-
-
-@app.route('/delete_month', methods=['POST'])
-@auth.login_required 
-def delete_month():
-    month_to_delete = request.form.get('month_to_delete')
-    
-    if not month_to_delete:
-        return "שם החודש אינו חוקי.", 400
-        
-    conn = get_db_connection()
-    try:
-        conn.execute("DELETE FROM payments WHERE month = ?", (month_to_delete,))
-        conn.commit()
-        conn.close()
-        
-        # שינוי: קורא ל-get_repo()
-        commit_data(get_repo(), message=f"Deleted data for {month_to_delete}")
-        
-        return redirect(url_for('index', message=f'הנתונים לחודש {month_to_delete} נמחקו בהצלחה!'))
-    except Exception as e:
-        return f"אירעה שגיאה במחיקת נתונים: {e}", 500
-
-
-@app.route('/send_report', methods=['POST'])
-@auth.login_required 
-def send_report():
-    current_month = request.form.get('month')
-    return redirect(url_for('index', month=current_month, message='❌ שליחת דוחות במייל אינה פעילה כרגע.'))
-
-
-if __name__ == '__main__':
-    app.run(debug=True)
-# end app.py
+        for student in
