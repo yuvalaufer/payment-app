@@ -12,7 +12,10 @@ from dotenv import load_dotenv
 load_dotenv()
 GIT_TOKEN = os.environ.get("GIT_TOKEN")
 # --- סוף טעינת משתני סביבה ---
-
+# הוסף שתי שורות אלו לבדיקה:
+print(f"DEBUG CHECK: GIT_TOKEN is set: {bool(GIT_TOKEN)}")
+print(f"DEBUG CHECK: GIT_REPO_URL is set: {bool(os.environ.get('GIT_REPO_URL'))}") 
+# ...
 # --- הגדרות נתיבים ---
 DATA_DIR = '.' 
 DATABASE = os.path.join(DATA_DIR, 'payments.db')
