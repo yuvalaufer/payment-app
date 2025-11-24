@@ -23,7 +23,7 @@ STUDENT_LIST_FILE = os.path.join(DATA_DIR, 'student_list.txt')
 DEFAULT_MONTHLY_FEE = 330 
 STATUS_OPTIONS = ['לא שולם', 'שולם', 'שולם חלקי']
 
-# 🚨 שינוי קריטי: REPO מוגדר כעת כ-None גלובלי
+# 🚨 REPO מוגדר כעת כ-None גלובלי
 REPO = None 
 # 🚨 הוספת פונקציה לבדיקה וטעינה עצלה של REPO
 def get_repo():
@@ -348,4 +348,81 @@ def update_payments():
         students_with_past_data = set(row['student_name'] for row in db_payments)
         final_students = students_with_past_data.union(set(students))
 
-        for student in
+        for student in final_students:
+            status = request.form.get(f'status_{student}')
+            paid_amount_str = request.form.get(f'paid_{student}')
+            
+            if not status:
+                continue
+
+            # 1. חילוץ הסכום ששולם מהטופס
+            paid_amount = int(paid_amount_str) if paid_amount_str and paid_amount_str.isdigit() else 0
+
+            # 2. התאמת הסכום בהתאם לסטטוס
+            if status == 'שולם':
+                # אם סומן "שולם", הסכום ששולם הוא העמלה החודשית המלאה
+                paid_amount = monthly_fee
+            elif status == 'שולם חלקי':
+                # אם סומן "שולם חלקי", משאירים את ה-paid_amount שחולץ (הסכום שהוזן)
+                pass 
+            else: # לא שולם
+                # אם סומן "לא שולם", הסכום ששולם הוא 0
+                paid_amount = 0 
+
+            conn.execute("""
+                INSERT OR REPLACE INTO payments (month, student_name, status, paid_amount)
+                VALUES (?, ?, ?, ?)
+            """, (current_month, student, status, paid_amount))
+            
+        conn.commit()
+        conn.close() 
+
+        commit_data(get_repo(), message=f"Updated payments for {current_month}")
+
+        return redirect(url_for('index', month=current_month, message='התשלומים נשמרו בהצלחה!'))
+    except Exception as e:
+        return f"אירעה שגיאה בעת שמירת התשלומים: {e}", 500
+
+@app.route('/edit_students', methods=['POST'])
+@auth.login_required
+def edit_students():
+    students_text = request.form['students_list']
+    new_students = students_text.split('\n')
+    
+    save_student_list(new_students) 
+    
+    return redirect(url_for('index', message='רשימת התלמידים עודכנה בהצלחה!'))
+
+
+@app.route('/delete_month', methods=['POST'])
+@auth.login_required 
+def delete_month():
+    month_to_delete = request.form.get('month_to_delete')
+    
+    if not month_to_delete:
+        return "שם החודש אינו חוקי.", 400
+        
+    conn = get_db_connection()
+    try:
+        conn.execute("DELETE FROM payments WHERE month = ?", (month_to_delete,))
+        conn.commit()
+        conn.close()
+        
+        commit_data(get_repo(), message=f"Deleted data for {month_to_delete}")
+        
+        return redirect(url_for('index', message=f'הנתונים לחודש {month_to_delete} נמחקו בהצלחה!'))
+    except Exception as e:
+        return f"אירעה שגיאה במחיקת נתונים: {e}", 500
+
+
+@app.route('/send_report', methods=['POST'])
+@auth.login_required 
+def send_report():
+    current_month = request.form.get('month')
+    return redirect(url_for('index', month=current_month, message='❌ שליחת דוחות במייל אינה פעילה כרגע.'))
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
+    
+#end app.py
