@@ -45,28 +45,46 @@ def setup_git_repo():
                 else:
                     auth_url = git_url
                 
-                # מנסים ליצור שלט (Remote) רק אם הוא לא קיים
+                # יצירת Remote
                 try:
                     if not repo.remotes:
                          repo.create_remote('origin', auth_url)
                 except git.exc.GitCommandError as git_err:
                      print(f"FATAL ERROR: Failed to create Git remote with auth URL: {git_err}")
-                     return None # כשל קריטי, לא ממשיכים
+                     return None
 
-            # --- 2. משיכת נתונים, גם במצב Detached HEAD ---
+            # --- 2. משיכת נתונים (שינוי כאן: ניסיון Fetch במקום Pull) ---
             try:
                 if repo and repo.remotes:
-                    print("INFO: Pulling latest data from GitHub (force update).")
-                    repo.remotes.origin.pull()
+                    print("INFO: Attempting Git FETCH to verify authentication.")
+                    # ביצוע fetch כדי לבדוק אימות
+                    repo.remotes.origin.fetch()
+                    
+                    # אם ה-fetch הצליח, נבצע merge של הנתונים לענף הראשי (main/master)
+                    if repo.heads:
+                        # משיכת הענף הראשי של ה-Remote
+                        remote_main_branch = [ref for ref in repo.remotes.origin.refs if ref.name.endswith('/main') or ref.name.endswith('/master')]
+                        
+                        if remote_main_branch:
+                            branch_name = remote_main_branch[0].remote_head
+                            repo.git.checkout(branch_name) 
+                            print(f"INFO: Successfully checked out branch: {branch_name}")
+                        else:
+                            print("ERROR: Could not determine primary branch name (main/master).")
+                            # אם אין ענפים ננסה pull רגיל
+                            repo.remotes.origin.pull()
+                    
+                    
             except Exception as e:
-                print(f"ERROR: Initial Git pull failed (CHECK GIT_TOKEN AND URL!): {e}")
-
+                # זו השורה הקריטית שתספר לנו אם ה-TOKEN או ה-URL שגויים
+                print(f"CRITICAL AUTH ERROR: Git Fetch/Checkout failed: {e}")
+                
         else:
             repo = git.Repo(repo_path)
-            # --- 2. משיכת נתונים, גם במצב Detached HEAD ---
+            # --- 2. משיכת נתונים קיימים ---
             try:
                 if repo.remotes:
-                    print("INFO: Pulling latest data from GitHub (ignoring detached HEAD).")
+                    print("INFO: Pulling latest data from GitHub (existing repo).")
                     repo.remotes.origin.pull()
             except Exception as e:
                 print(f"ERROR: Git pull failed (CHECK GIT_TOKEN AND URL!): {e}")
@@ -81,6 +99,7 @@ def setup_git_repo():
         return None
 
 def commit_data(repo, message="Data update from web app"):
+    # ... (שאר הפונקציה ללא שינוי)
     """שומר את קבצי הנתונים ב-GitHub."""
     if not repo:
         return False
@@ -109,6 +128,7 @@ def commit_data(repo, message="Data update from web app"):
         return False
 # --- סוף פונקציות GIT ---
 
+# ... (שאר הקובץ נשאר זהה)
 
 # הגדרת שפה לעברית עבור תאריכים
 try:
