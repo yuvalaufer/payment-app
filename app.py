@@ -23,7 +23,16 @@ STUDENT_LIST_FILE = os.path.join(DATA_DIR, 'student_list.txt')
 DEFAULT_MONTHLY_FEE = 330 
 STATUS_OPTIONS = ['לא שולם', 'שולם', 'שולם חלקי']
 
-# --- פונקציות GIT - מעודכן לכידת שגיאות ---
+# 🚨 שינוי קריטי: REPO מוגדר כעת כ-None גלובלי
+REPO = None 
+# 🚨 הוספת פונקציה לבדיקה וטעינה עצלה של REPO
+def get_repo():
+    global REPO
+    if REPO is None:
+        REPO = setup_git_repo()
+    return REPO
+
+# --- פונקציות GIT - לכידת שגיאות משופרת ---
 def setup_git_repo():
     """מאתחל את רפוזיטורי ה-Git המקומי ומושך נתונים עדכניים."""
     try:
@@ -48,21 +57,20 @@ def setup_git_repo():
                 # יצירת Remote
                 try:
                     if not repo.remotes:
+                         print("INFO: Creating remote 'origin'.")
                          repo.create_remote('origin', auth_url)
                 except git.exc.GitCommandError as git_err:
                      print(f"FATAL ERROR: Failed to create Git remote with auth URL: {git_err}")
                      return None
 
-            # --- 2. משיכת נתונים (שינוי כאן: ניסיון Fetch במקום Pull) ---
+            # --- 2. משיכת נתונים (ניסיון Fetch) ---
             try:
                 if repo and repo.remotes:
                     print("INFO: Attempting Git FETCH to verify authentication.")
-                    # ביצוע fetch כדי לבדוק אימות
                     repo.remotes.origin.fetch()
                     
-                    # אם ה-fetch הצליח, נבצע merge של הנתונים לענף הראשי (main/master)
+                    # אם ה-fetch הצליח, נבצע checkout
                     if repo.heads:
-                        # משיכת הענף הראשי של ה-Remote
                         remote_main_branch = [ref for ref in repo.remotes.origin.refs if ref.name.endswith('/main') or ref.name.endswith('/master')]
                         
                         if remote_main_branch:
@@ -71,12 +79,10 @@ def setup_git_repo():
                             print(f"INFO: Successfully checked out branch: {branch_name}")
                         else:
                             print("ERROR: Could not determine primary branch name (main/master).")
-                            # אם אין ענפים ננסה pull רגיל
                             repo.remotes.origin.pull()
                     
-                    
             except Exception as e:
-                # זו השורה הקריטית שתספר לנו אם ה-TOKEN או ה-URL שגויים
+                # 🚨 זו השורה הקריטית שתספר לנו אם ה-TOKEN או ה-URL שגויים
                 print(f"CRITICAL AUTH ERROR: Git Fetch/Checkout failed: {e}")
                 
         else:
@@ -98,25 +104,24 @@ def setup_git_repo():
         print(f"FATAL ERROR: Git setup failed entirely (General Error): {e}")
         return None
 
-def commit_data(repo, message="Data update from web app"):
-    # ... (שאר הפונקציה ללא שינוי)
+def commit_data(repo_instance, message="Data update from web app"):
     """שומר את קבצי הנתונים ב-GitHub."""
-    if not repo:
+    if not repo_instance: # שינוי: קורא ל-repo_instance במקום REPO גלובלי
         return False
         
     try:
         if os.path.exists(DATABASE):
-            repo.index.add([DATABASE])
+            repo_instance.index.add([DATABASE])
         if os.path.exists(STUDENT_LIST_FILE):
-            repo.index.add([STUDENT_LIST_FILE])
+            repo_instance.index.add([STUDENT_LIST_FILE])
 
-        if not repo.index.diff(None):
+        if not repo_instance.index.diff(None):
             return True 
 
-        repo.index.commit(message)
+        repo_instance.index.commit(message)
         
         if GIT_TOKEN:
-            repo.remote('origin').push()
+            repo_instance.remote('origin').push()
             print("INFO: Data pushed to GitHub successfully.")
             return True
         else:
@@ -128,8 +133,6 @@ def commit_data(repo, message="Data update from web app"):
         return False
 # --- סוף פונקציות GIT ---
 
-# ... (שאר הקובץ נשאר זהה)
-
 # הגדרת שפה לעברית עבור תאריכים
 try:
     locale.setlocale(locale.LC_ALL, 'he_IL.UTF-8')
@@ -139,12 +142,11 @@ except locale.Error:
     except:
         pass 
 
-# הוספנו את המשתנה הגלובלי ל-GIT_REPO_URL לגישה נוחה יותר:
 # DEBUG CHECK:
 print(f"DEBUG CHECK: GIT_TOKEN is set: {bool(GIT_TOKEN)}")
 print(f"DEBUG CHECK: GIT_REPO_URL is set: {bool(GIT_REPO_URL)}") 
 
-REPO = setup_git_repo()
+# 🚨 REPO לא נקרא כאן יותר, הוא נקרא דרך get_repo()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '1A2B3C4D5E6F7G8H9I0J_SUPER_SECRET' 
@@ -188,7 +190,6 @@ def init_db():
     
     c.execute("SELECT COUNT(*) FROM settings")
     if c.fetchone()[0] == 0:
-        # משתמש ב-DEFAULT_MONTHLY_FEE = 330
         c.execute("INSERT INTO settings (id, monthly_fee, report_email) VALUES (1, ?, ?)", 
                   (DEFAULT_MONTHLY_FEE, 'your_email_disabled@example.com')) 
 
@@ -221,10 +222,12 @@ def save_student_list(students):
     with open(STUDENT_LIST_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(cleaned_students))
     
-    commit_data(REPO, message="Updated student list")
+    # שינוי: קורא ל-get_repo()
+    commit_data(get_repo(), message="Updated student list")
 
 
 if not os.path.exists(STUDENT_LIST_FILE):
+    # שינוי: קורא ל-get_repo()
     save_student_list(["דוגמא אברהם", "לוי משה", "כהן שרה"])
     
     
@@ -234,6 +237,9 @@ if not os.path.exists(STUDENT_LIST_FILE):
 @auth.login_required
 def index():
     conn = get_db_connection()
+    # ... (שאר הפונקציה ללא שינוי מהותי)
+
+    # ... (שאר הקוד ב-index)
     settings = conn.execute("SELECT monthly_fee, report_email FROM settings WHERE id = 1").fetchone()
     current_master_list = load_student_list() 
     
@@ -322,7 +328,8 @@ def update_settings():
         conn.commit()
         conn.close()
         
-        commit_data(REPO, message="Updated global settings")
+        # שינוי: קורא ל-get_repo()
+        commit_data(get_repo(), message="Updated global settings")
 
         return redirect(url_for('index', message='ההגדרות נשמרו בהצלחה!'))
     except Exception as e:
@@ -365,7 +372,8 @@ def update_payments():
         conn.commit()
         conn.close() 
 
-        commit_data(REPO, message=f"Updated payments for {current_month}")
+        # שינוי: קורא ל-get_repo()
+        commit_data(get_repo(), message=f"Updated payments for {current_month}")
 
         return redirect(url_for('index', month=current_month, message='התשלומים נשמרו בהצלחה!'))
     except Exception as e:
@@ -377,6 +385,7 @@ def edit_students():
     students_text = request.form['students_list']
     new_students = students_text.split('\n')
     
+    # שינוי: קורא ל-get_repo()
     save_student_list(new_students) 
     
     return redirect(url_for('index', message='רשימת התלמידים עודכנה בהצלחה!'))
@@ -396,7 +405,8 @@ def delete_month():
         conn.commit()
         conn.close()
         
-        commit_data(REPO, message=f"Deleted data for {month_to_delete}")
+        # שינוי: קורא ל-get_repo()
+        commit_data(get_repo(), message=f"Deleted data for {month_to_delete}")
         
         return redirect(url_for('index', message=f'הנתונים לחודש {month_to_delete} נמחקו בהצלחה!'))
     except Exception as e:
@@ -406,7 +416,6 @@ def delete_month():
 @app.route('/send_report', methods=['POST'])
 @auth.login_required 
 def send_report():
-    # ניתוב שליחת המייל הוסר והוחלף בהודעת שגיאה
     current_month = request.form.get('month')
     return redirect(url_for('index', month=current_month, message='❌ שליחת דוחות במייל אינה פעילה כרגע.'))
 
