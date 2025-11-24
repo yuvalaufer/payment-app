@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 # --- טעינת משתני סביבה (לגישה ל-GIT) ---
 load_dotenv()
 GIT_TOKEN = os.environ.get("GIT_TOKEN")
+GIT_REPO_URL = os.environ.get('RENDER_GIT_REPO_URL') or os.environ.get('GIT_REPO_URL')
 # --- סוף טעינת משתני סביבה ---
 
 # --- הגדרות נתיבים ---
@@ -22,7 +23,7 @@ STUDENT_LIST_FILE = os.path.join(DATA_DIR, 'student_list.txt')
 DEFAULT_MONTHLY_FEE = 330 
 STATUS_OPTIONS = ['לא שולם', 'שולם', 'שולם חלקי']
 
-# --- פונקציות GIT - מעודכן לטיפול בפורמט URL ---
+# --- פונקציות GIT - מעודכן לכידת שגיאות ---
 def setup_git_repo():
     """מאתחל את רפוזיטורי ה-Git המקומי ומושך נתונים עדכניים."""
     try:
@@ -34,28 +35,30 @@ def setup_git_repo():
             print("INFO: Initializing new repository.")
             repo = git.Repo.init(repo_path)
             
-            git_url = os.environ.get('RENDER_GIT_REPO_URL') or os.environ.get('GIT_REPO_URL')
+            git_url = GIT_REPO_URL
             
             if git_url and GIT_TOKEN:
                 
-                # 🛠️ תיקון פורמט URL: שינוי אופן בניית ה-URL המאומת
+                # 🛠️ פורמט URL: https://oauth2:TOKEN@github.com/...
                 if git_url.startswith("https://"):
-                    # חותך את "https://" ומוסיף את האימות: https://oauth2:TOKEN@github.com/...
                     auth_url = f"https://oauth2:{GIT_TOKEN}@{git_url[8:]}" 
                 else:
                     auth_url = git_url
                 
                 # מנסים ליצור שלט (Remote) רק אם הוא לא קיים
-                if not repo.remotes:
-                     repo.create_remote('origin', auth_url)
+                try:
+                    if not repo.remotes:
+                         repo.create_remote('origin', auth_url)
+                except git.exc.GitCommandError as git_err:
+                     print(f"FATAL ERROR: Failed to create Git remote with auth URL: {git_err}")
+                     return None # כשל קריטי, לא ממשיכים
 
             # --- 2. משיכת נתונים, גם במצב Detached HEAD ---
             try:
-                if repo.remotes:
+                if repo and repo.remotes:
                     print("INFO: Pulling latest data from GitHub (force update).")
                     repo.remotes.origin.pull()
             except Exception as e:
-                # אם שורה זו מופיעה, הבעיה היא אימות (Token או URL שגויים)
                 print(f"ERROR: Initial Git pull failed (CHECK GIT_TOKEN AND URL!): {e}")
 
         else:
@@ -69,11 +72,12 @@ def setup_git_repo():
                 print(f"ERROR: Git pull failed (CHECK GIT_TOKEN AND URL!): {e}")
             
         # 3. הגדרת פרטי המשתמש ל-Commit
-        repo.config_writer().set_value('user', 'email', 'render-bot@example.com').release()
-        repo.config_writer().set_value('user', 'name', 'Render Data Bot').release()
+        if repo:
+             repo.config_writer().set_value('user', 'email', 'render-bot@example.com').release()
+             repo.config_writer().set_value('user', 'name', 'Render Data Bot').release()
         return repo
     except Exception as e:
-        print(f"FATAL ERROR: Git setup failed entirely: {e}")
+        print(f"FATAL ERROR: Git setup failed entirely (General Error): {e}")
         return None
 
 def commit_data(repo, message="Data update from web app"):
@@ -114,6 +118,11 @@ except locale.Error:
         locale.setlocale(locale.LC_ALL, 'he_IL')
     except:
         pass 
+
+# הוספנו את המשתנה הגלובלי ל-GIT_REPO_URL לגישה נוחה יותר:
+# DEBUG CHECK:
+print(f"DEBUG CHECK: GIT_TOKEN is set: {bool(GIT_TOKEN)}")
+print(f"DEBUG CHECK: GIT_REPO_URL is set: {bool(GIT_REPO_URL)}") 
 
 REPO = setup_git_repo()
 
